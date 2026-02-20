@@ -1,0 +1,82 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "bigLust_v16.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["1", 0],
+      "clip": ["1", 1],
+      "lora_name": "dmd2_sdxl_4step_lora.safetensors",
+      "strength_model": 0.7,
+      "strength_clip": 0.7
+    }
+  },
+  "3": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["2", 0],
+      "clip": ["2", 1],
+      "lora_name": "valentina-000003.safetensors",
+      "strength_model": 1.0,
+      "strength_clip": 1.0
+    }
+  },
+  "4": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "1girl, looking at viewer, photorealistic, detailed face, detailed eyes",
+      "clip": ["3", 1]
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "reflections errors, blur, oversharpening, poor composition, deformed, ugly, bad anatomy",
+      "clip": ["3", 1]
+    }
+  },
+  "7": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "model": ["3", 0],
+      "positive": ["5", 0],
+      "negative": ["6", 0],
+      "latent_image": ["4", 0],
+      "add_noise": "enable",
+      "noise_seed": 42,
+      "steps": 10,
+      "cfg": 1,
+      "sampler_name": "lcm",
+      "scheduler": "karras",
+      "start_at_step": 0,
+      "end_at_step": 9999,
+      "return_with_leftover_noise": "enable"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["7", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "output",
+      "images": ["8", 0]
+    }
+  }
+}
