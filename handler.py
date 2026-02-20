@@ -200,6 +200,65 @@ def fetch_image(filename: str, subfolder: str = "", img_type: str = "output") ->
     return resp.content
 
 
+def debug_filesystem() -> dict:
+    """Debug helper: inspect filesystem to find where models are (or aren't)."""
+    import subprocess
+    info = {}
+
+    paths_to_check = [
+        "/runpod-volume",
+        "/runpod-volume/checkpoints",
+        "/runpod-volume/loras",
+        "/workspace/ComfyUI/models/checkpoints",
+        "/workspace/ComfyUI/models/loras",
+        "/workspace/ComfyUI/models",
+        "/workspace",
+    ]
+
+    for p in paths_to_check:
+        if os.path.exists(p):
+            if os.path.isdir(p):
+                try:
+                    entries = os.listdir(p)
+                    info[p] = {"exists": True, "is_dir": True, "contents": entries[:50]}
+                except Exception as e:
+                    info[p] = {"exists": True, "error": str(e)}
+            else:
+                info[p] = {"exists": True, "is_dir": False, "size": os.path.getsize(p)}
+        else:
+            info[p] = {"exists": False}
+
+    try:
+        result = subprocess.run(["find", "/runpod-volume", "-type", "f", "-name", "*.safetensors"],
+                              capture_output=True, text=True, timeout=10)
+        info["find_safetensors_in_volume"] = result.stdout.strip().split("\n") if result.stdout.strip() else []
+    except Exception as e:
+        info["find_safetensors_in_volume"] = f"error: {e}"
+
+    try:
+        result = subprocess.run(["find", "/workspace/ComfyUI/models", "-type", "f", "-name", "*.safetensors"],
+                              capture_output=True, text=True, timeout=10)
+        info["find_safetensors_in_comfyui"] = result.stdout.strip().split("\n") if result.stdout.strip() else []
+    except Exception as e:
+        info["find_safetensors_in_comfyui"] = f"error: {e}"
+
+    try:
+        result = subprocess.run(["df", "-h"], capture_output=True, text=True, timeout=5)
+        info["disk_usage"] = result.stdout
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(["mount"], capture_output=True, text=True, timeout=5)
+        mounts = [l for l in result.stdout.split("\n") if "runpod" in l.lower() or "volume" in l.lower() or "fuse" in l.lower()]
+        info["relevant_mounts"] = mounts
+    except Exception:
+        pass
+
+    print(f"[debug] Filesystem info: {json.dumps(info, indent=2)}")
+    return {"debug_filesystem": info}
+
+
 def handler(job: dict) -> dict:
     """
     RunPod handler entry point.
@@ -228,6 +287,10 @@ def handler(job: dict) -> dict:
     """
     try:
         inp = job.get("input", {})
+
+        if inp.get("debug_filesystem"):
+            return debug_filesystem()
+
         lora = inp.get("lora_name", "none")
         print(f"[handler] Job received. lora={lora}, prompt={str(inp.get('prompt',''))[:80]}...")
 
