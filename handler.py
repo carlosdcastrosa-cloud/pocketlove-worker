@@ -9,6 +9,7 @@ import json
 import time
 import base64
 import os
+import sys
 import uuid
 
 COMFY_URL = "http://127.0.0.1:8188"
@@ -109,7 +110,7 @@ def build_workflow(inp: dict) -> dict:
     steps = inp.get("num_inference_steps", 30)
     cfg = inp.get("guidance_scale", 5.0)
     seed = inp.get("seed", -1)
-    if seed <= 0:
+    if seed is None or seed <= 0:
         seed = int.from_bytes(os.urandom(4), "big")
     ckpt = inp.get("ckpt_name", CKPT_NAME)
 
@@ -121,8 +122,24 @@ def build_workflow(inp: dict) -> dict:
     wf["3"]["inputs"]["steps"] = steps
     wf["3"]["inputs"]["cfg"] = cfg
     wf["3"]["inputs"]["seed"] = seed
+    wf["9"]["inputs"]["filename_prefix"] = f"job_{uuid.uuid4().hex[:8]}"
 
     return wf
+
+
+def wait_for_comfyui(timeout_sec: int = 180):
+    """Wait until ComfyUI /system_stats responds."""
+    start = time.time()
+    while time.time() - start < timeout_sec:
+        try:
+            resp = requests.get(f"{COMFY_URL}/system_stats", timeout=5)
+            if resp.ok:
+                print(f"[handler] ComfyUI ready ({int(time.time() - start)}s)")
+                return True
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+    return False
 
 
 def queue_prompt(workflow: dict) -> str:
@@ -141,7 +158,7 @@ def queue_prompt(workflow: dict) -> str:
     return prompt_id
 
 
-def poll_completion(prompt_id: str, timeout_sec: int = 180) -> dict:
+def poll_completion(prompt_id: str, timeout_sec: int = 600) -> dict:
     """Poll /history/{prompt_id} until the job completes or times out."""
     start = time.time()
     poll_interval = 2.0
@@ -186,11 +203,9 @@ def handler(job: dict) -> dict:
       - workflow (dict|str): Full custom ComfyUI workflow (overrides all above)
 
     Returns:
-      - image_b64 (str): Base64-encoded PNG
-      - seed (int): Seed used
-      - width (int): Output width
-      - height (int): Output height
+      - image_base64 (str): Base64-encoded PNG
       - prompt_id (str): ComfyUI prompt ID
+      - meta (dict): seed, width, height
     """
     try:
         inp = job.get("input", {})
@@ -205,18 +220,19 @@ def handler(job: dict) -> dict:
         prompt_id = queue_prompt(workflow)
         print(f"[handler] prompt_id={prompt_id}, polling...")
 
-        result = poll_completion(prompt_id, timeout_sec=180)
+        result = poll_completion(prompt_id, timeout_sec=600)
 
         outputs = result.get("outputs", {})
         image_data = None
+        filename_out = ""
         for node_id, node_output in outputs.items():
             if "images" in node_output:
                 for img_info in node_output["images"]:
-                    filename = img_info.get("filename", "")
+                    filename_out = img_info.get("filename", "")
                     subfolder = img_info.get("subfolder", "")
                     img_type = img_info.get("type", "output")
-                    print(f"[handler] Fetching image: {filename}")
-                    image_data = fetch_image(filename, subfolder, img_type)
+                    print(f"[handler] Fetching image: {filename_out}")
+                    image_data = fetch_image(filename_out, subfolder, img_type)
                     break
             if image_data:
                 break
@@ -228,11 +244,14 @@ def handler(job: dict) -> dict:
         print(f"[handler] Done. Image size: {len(image_b64)} chars base64")
 
         return {
-            "image_b64": image_b64,
-            "seed": seed_used,
-            "width": w,
-            "height": h,
+            "image_base64": image_b64,
             "prompt_id": prompt_id,
+            "meta": {
+                "seed": seed_used,
+                "width": w,
+                "height": h,
+                "filename": filename_out,
+            },
         }
 
     except Exception as e:
@@ -241,7 +260,13 @@ def handler(job: dict) -> dict:
         return {"error": str(e)}
 
 
-runpod.serverless.start({
-    "handler": handler,
-    "concurrency_modifier": lambda x: 1,
-})
+if __name__ == "__main__":
+    if "--wait-only" in sys.argv:
+        print("[handler] --wait-only mode: waiting for ComfyUI...")
+        ok = wait_for_comfyui(timeout_sec=180)
+        sys.exit(0 if ok else 1)
+    else:
+        runpod.serverless.start({
+            "handler": handler,
+            "concurrency_modifier": lambda x: 1,
+        })
