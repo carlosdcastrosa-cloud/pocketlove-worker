@@ -9,6 +9,7 @@ ENV DEFAULT_STEPS=10
 ENV DEFAULT_CFG=1
 ENV DEFAULT_SAMPLER=lcm
 ENV DEFAULT_SCHEDULER=karras
+ENV WORKFLOW_JSON=""
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip git curl ca-certificates \
