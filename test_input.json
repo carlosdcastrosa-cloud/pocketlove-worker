@@ -1,11 +1,11 @@
 {
   "input": {
-    "prompt": "candid photo of a beautiful woman, soft natural smile, standing in a sunlit room, photorealistic, RAW photo, natural lighting, realistic skin texture, 8k UHD",
-    "negative_prompt": "anime, cartoon, illustration, drawing, painting, digital art, CGI, 3D render, extra limbs, deformed, watermark, text, low quality, mutated hands, bad anatomy",
-    "width": 768,
+    "prompt": "valentina, 1girl, long hair, looking at viewer, blonde hair, blue eyes, detailed face, detailed eyes, photorealistic, natural lighting, indoors, bedroom",
+    "negative_prompt": "reflections errors, blur, oversharpening, poor composition, deformed, ugly, bad anatomy, extra fingers, extra limbs",
+    "lora_name": "valentina-000003.safetensors",
+    "lora_strength": 1.0,
+    "width": 1024,
     "height": 1024,
-    "num_inference_steps": 30,
-    "guidance_scale": 5.0,
     "seed": 42
   }
 }
