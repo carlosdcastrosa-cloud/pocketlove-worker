@@ -6,7 +6,7 @@ ENV CKPT_NAME=sd_xl_base_1.0.safetensors
 ENV WORKFLOW_JSON=""
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv git wget curl \
+    python3 python3-pip git curl ca-certificates \
     libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -20,12 +20,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY requirements.txt /workspace/requirements.txt
 RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
+RUN mkdir -p /workspace/ComfyUI/models/checkpoints \
+    /workspace/ComfyUI/models/loras \
+    /workspace/ComfyUI/input \
+    /workspace/ComfyUI/output
+
 COPY handler.py /workspace/handler.py
 COPY start.sh /workspace/start.sh
 RUN chmod +x /workspace/start.sh
 
 WORKDIR /workspace
-
-EXPOSE 8188
 
 CMD ["/workspace/start.sh"]
