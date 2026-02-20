@@ -2,8 +2,13 @@ FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-ENV CKPT_NAME=sd_xl_base_1.0.safetensors
-ENV WORKFLOW_JSON=""
+ENV CKPT_NAME=bigLust_v16.safetensors
+ENV DMD2_LORA=dmd2_sdxl_4step_lora.safetensors
+ENV DMD2_STRENGTH=0.7
+ENV DEFAULT_STEPS=10
+ENV DEFAULT_CFG=1
+ENV DEFAULT_SAMPLER=lcm
+ENV DEFAULT_SCHEDULER=karras
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip git curl ca-certificates \
@@ -25,6 +30,7 @@ RUN mkdir -p /workspace/ComfyUI/models/checkpoints \
     /workspace/ComfyUI/input \
     /workspace/ComfyUI/output
 
+COPY workflow_api.json /workspace/workflow_api.json
 COPY handler.py /workspace/handler.py
 COPY start.sh /workspace/start.sh
 RUN chmod +x /workspace/start.sh
