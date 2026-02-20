@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -12,11 +12,16 @@ ENV DEFAULT_SCHEDULER=karras
 ENV WORKFLOW_JSON=""
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip git curl ca-certificates \
+    python3 python3-pip python3-dev git curl ca-certificates \
     libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -sf /usr/bin/python3 /usr/bin/python
+
+RUN pip install --no-cache-dir --upgrade pip
+
+RUN pip install --no-cache-dir \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /workspace/ComfyUI
 
