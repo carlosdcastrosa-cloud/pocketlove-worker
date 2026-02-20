@@ -1,7 +1,19 @@
 """
 RunPod Serverless Handler for ComfyUI.
-Receives a job, submits a workflow to ComfyUI local API,
-polls for completion, and returns the generated image as base64.
+Receives a job, builds a workflow from workflow_api.json,
+submits it to ComfyUI local API, polls for completion,
+and returns the generated image as base64.
+
+Workflow pipeline:
+  CheckpointLoaderSimple (bigLust_v16) →
+  LoraLoader (dmd2_sdxl_4step) →
+  LoraLoader (character lora) →
+  EmptyLatentImage →
+  CLIPTextEncode (positive) →
+  CLIPTextEncode (negative) →
+  KSamplerAdvanced (lcm, 10 steps, cfg 1) →
+  VAEDecode →
+  SaveImage
 """
 import runpod
 import requests
@@ -11,118 +23,112 @@ import base64
 import os
 import sys
 import uuid
+import copy
 
 COMFY_URL = "http://127.0.0.1:8188"
-CKPT_NAME = os.environ.get("CKPT_NAME", "sd_xl_base_1.0.safetensors")
-WORKFLOW_JSON = os.environ.get("WORKFLOW_JSON", "")
+CKPT_NAME = os.environ.get("CKPT_NAME", "bigLust_v16.safetensors")
+DMD2_LORA = os.environ.get("DMD2_LORA", "dmd2_sdxl_4step_lora.safetensors")
+DMD2_STRENGTH = float(os.environ.get("DMD2_STRENGTH", "0.7"))
+DEFAULT_STEPS = int(os.environ.get("DEFAULT_STEPS", "10"))
+DEFAULT_CFG = float(os.environ.get("DEFAULT_CFG", "1"))
+DEFAULT_SAMPLER = os.environ.get("DEFAULT_SAMPLER", "lcm")
+DEFAULT_SCHEDULER = os.environ.get("DEFAULT_SCHEDULER", "karras")
 
-_env_workflow = None
-if WORKFLOW_JSON:
-    try:
-        if os.path.isfile(WORKFLOW_JSON):
-            with open(WORKFLOW_JSON, "r") as f:
-                _env_workflow = json.load(f)
-            print(f"[handler] Loaded workflow from file: {WORKFLOW_JSON}")
-        else:
-            _env_workflow = json.loads(WORKFLOW_JSON)
-            print(f"[handler] Loaded workflow from ENV string")
-    except Exception as e:
-        print(f"[handler] WARNING: Failed to parse WORKFLOW_JSON: {e}")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+WORKFLOW_PATH = os.path.join(SCRIPT_DIR, "workflow_api.json")
 
-DEFAULT_WORKFLOW = {
-    "3": {
-        "class_type": "KSampler",
-        "inputs": {
-            "seed": 42,
-            "steps": 30,
-            "cfg": 5.0,
-            "sampler_name": "dpmpp_2m",
-            "scheduler": "karras",
-            "denoise": 1.0,
-            "model": ["4", 0],
-            "positive": ["6", 0],
-            "negative": ["7", 0],
-            "latent_image": ["5", 0]
-        }
-    },
-    "4": {
-        "class_type": "CheckpointLoaderSimple",
-        "inputs": {
-            "ckpt_name": CKPT_NAME
-        }
-    },
-    "5": {
-        "class_type": "EmptyLatentImage",
-        "inputs": {
-            "width": 768,
-            "height": 1024,
-            "batch_size": 1
-        }
-    },
-    "6": {
-        "class_type": "CLIPTextEncode",
-        "inputs": {
-            "text": "a beautiful woman",
-            "clip": ["4", 1]
-        }
-    },
-    "7": {
-        "class_type": "CLIPTextEncode",
-        "inputs": {
-            "text": "bad quality, blurry, deformed",
-            "clip": ["4", 1]
-        }
-    },
-    "8": {
-        "class_type": "VAEDecode",
-        "inputs": {
-            "samples": ["3", 0],
-            "vae": ["4", 2]
-        }
-    },
-    "9": {
-        "class_type": "SaveImage",
-        "inputs": {
-            "filename_prefix": "output",
-            "images": ["8", 0]
-        }
-    }
-}
+_base_workflow = None
+
+def load_base_workflow():
+    """Load the base workflow JSON (once)."""
+    global _base_workflow
+    if _base_workflow is not None:
+        return _base_workflow
+
+    custom_path = os.environ.get("WORKFLOW_JSON", "")
+    if custom_path and os.path.isfile(custom_path):
+        with open(custom_path, "r") as f:
+            _base_workflow = json.load(f)
+        print(f"[handler] Loaded workflow from ENV: {custom_path}")
+        return _base_workflow
+
+    if os.path.isfile(WORKFLOW_PATH):
+        with open(WORKFLOW_PATH, "r") as f:
+            _base_workflow = json.load(f)
+        print(f"[handler] Loaded workflow from: {WORKFLOW_PATH}")
+        return _base_workflow
+
+    raise FileNotFoundError(f"No workflow found at {WORKFLOW_PATH} or WORKFLOW_JSON env")
 
 
 def build_workflow(inp: dict) -> dict:
-    """Build a ComfyUI workflow from job input, ENV workflow, or built-in default."""
+    """
+    Build a ComfyUI API workflow from job input.
+
+    Accepts a full custom workflow override, or modifies the base workflow with:
+      - prompt / negative_prompt
+      - lora_name / lora_strength (character LoRA)
+      - width / height
+      - steps / cfg / sampler_name / scheduler
+      - seed
+      - ckpt_name
+      - dmd2_lora / dmd2_strength
+    """
     custom_workflow = inp.get("workflow")
     if custom_workflow:
         if isinstance(custom_workflow, str):
             return json.loads(custom_workflow)
-        return json.loads(json.dumps(custom_workflow))
+        return copy.deepcopy(custom_workflow)
 
-    if _env_workflow:
-        return json.loads(json.dumps(_env_workflow))
+    base = load_base_workflow()
+    wf = copy.deepcopy(base)
 
-    wf = json.loads(json.dumps(DEFAULT_WORKFLOW))
+    ckpt = inp.get("ckpt_name", CKPT_NAME)
+    wf["1"]["inputs"]["ckpt_name"] = ckpt
 
-    prompt_text = inp.get("prompt", "a beautiful woman")
-    negative_prompt = inp.get("negative_prompt", "bad quality, blurry, deformed")
-    width = inp.get("width", 768)
+    dmd2_lora = inp.get("dmd2_lora", DMD2_LORA)
+    dmd2_str = inp.get("dmd2_strength", DMD2_STRENGTH)
+    wf["2"]["inputs"]["lora_name"] = dmd2_lora
+    wf["2"]["inputs"]["strength_model"] = dmd2_str
+    wf["2"]["inputs"]["strength_clip"] = dmd2_str
+
+    lora_name = inp.get("lora_name", "")
+    lora_strength = inp.get("lora_strength", 1.0)
+    if lora_name:
+        wf["3"]["inputs"]["lora_name"] = lora_name
+        wf["3"]["inputs"]["strength_model"] = lora_strength
+        wf["3"]["inputs"]["strength_clip"] = lora_strength
+    else:
+        wf["3"]["inputs"]["strength_model"] = 0.0
+        wf["3"]["inputs"]["strength_clip"] = 0.0
+
+    width = inp.get("width", 1024)
     height = inp.get("height", 1024)
-    steps = inp.get("num_inference_steps", 30)
-    cfg = inp.get("guidance_scale", 5.0)
+    wf["4"]["inputs"]["width"] = width
+    wf["4"]["inputs"]["height"] = height
+
+    prompt_text = inp.get("prompt", "1girl, looking at viewer, photorealistic, detailed face")
+    negative_prompt = inp.get("negative_prompt", "reflections errors, blur, oversharpening, poor composition, deformed, ugly, bad anatomy")
+    wf["5"]["inputs"]["text"] = prompt_text
+    wf["6"]["inputs"]["text"] = negative_prompt
+
     seed = inp.get("seed", -1)
     if seed is None or seed <= 0:
         seed = int.from_bytes(os.urandom(4), "big")
-    ckpt = inp.get("ckpt_name", CKPT_NAME)
 
-    wf["4"]["inputs"]["ckpt_name"] = ckpt
-    wf["6"]["inputs"]["text"] = prompt_text
-    wf["7"]["inputs"]["text"] = negative_prompt
-    wf["5"]["inputs"]["width"] = width
-    wf["5"]["inputs"]["height"] = height
-    wf["3"]["inputs"]["steps"] = steps
-    wf["3"]["inputs"]["cfg"] = cfg
-    wf["3"]["inputs"]["seed"] = seed
-    wf["9"]["inputs"]["filename_prefix"] = f"job_{uuid.uuid4().hex[:8]}"
+    steps = inp.get("num_inference_steps", inp.get("steps", DEFAULT_STEPS))
+    cfg = inp.get("guidance_scale", inp.get("cfg", DEFAULT_CFG))
+    sampler = inp.get("sampler_name", DEFAULT_SAMPLER)
+    scheduler = inp.get("scheduler", DEFAULT_SCHEDULER)
+
+    wf["7"]["inputs"]["noise_seed"] = seed
+    wf["7"]["inputs"]["steps"] = steps
+    wf["7"]["inputs"]["cfg"] = cfg
+    wf["7"]["inputs"]["sampler_name"] = sampler
+    wf["7"]["inputs"]["scheduler"] = scheduler
+
+    job_prefix = f"job_{uuid.uuid4().hex[:8]}"
+    wf["9"]["inputs"]["filename_prefix"] = job_prefix
 
     return wf
 
@@ -189,34 +195,44 @@ def fetch_image(filename: str, subfolder: str = "", img_type: str = "output") ->
 
 def handler(job: dict) -> dict:
     """
-    RunPod handler. Receives job input, runs ComfyUI workflow, returns base64 image.
+    RunPod handler entry point.
 
     Input fields:
-      - prompt (str): Positive prompt text
-      - negative_prompt (str): Negative prompt text
-      - width (int): Image width (default 768)
+      - prompt (str): Positive prompt
+      - negative_prompt (str): Negative prompt
+      - lora_name (str): Character LoRA filename (e.g. "valentina-000003.safetensors")
+      - lora_strength (float): Character LoRA strength (default 1.0)
+      - width (int): Image width (default 1024)
       - height (int): Image height (default 1024)
-      - num_inference_steps (int): Sampling steps (default 30)
-      - guidance_scale (float): CFG scale (default 5.0)
+      - num_inference_steps (int): Sampling steps (default 10)
+      - guidance_scale (float): CFG scale (default 1)
       - seed (int): Seed (-1 for random)
-      - ckpt_name (str): Checkpoint filename (default from ENV)
+      - sampler_name (str): Sampler (default "lcm")
+      - scheduler (str): Scheduler (default "karras")
+      - ckpt_name (str): Checkpoint filename
+      - dmd2_lora (str): DMD2 LoRA filename
+      - dmd2_strength (float): DMD2 LoRA strength (default 0.7)
       - workflow (dict|str): Full custom ComfyUI workflow (overrides all above)
 
     Returns:
       - image_base64 (str): Base64-encoded PNG
       - prompt_id (str): ComfyUI prompt ID
-      - meta (dict): seed, width, height
+      - meta (dict): seed, width, height, lora_name, steps, cfg
     """
     try:
         inp = job.get("input", {})
-        print(f"[handler] Job received. prompt={str(inp.get('prompt',''))[:100]}...")
+        lora = inp.get("lora_name", "none")
+        print(f"[handler] Job received. lora={lora}, prompt={str(inp.get('prompt',''))[:80]}...")
 
         workflow = build_workflow(inp)
-        seed_used = workflow.get("3", {}).get("inputs", {}).get("seed", -1)
-        w = workflow.get("5", {}).get("inputs", {}).get("width", 768)
-        h = workflow.get("5", {}).get("inputs", {}).get("height", 1024)
 
-        print(f"[handler] Queuing prompt: {w}x{h}, seed={seed_used}")
+        seed_used = workflow.get("7", {}).get("inputs", {}).get("noise_seed", -1)
+        w = workflow.get("4", {}).get("inputs", {}).get("width", 1024)
+        h = workflow.get("4", {}).get("inputs", {}).get("height", 1024)
+        steps = workflow.get("7", {}).get("inputs", {}).get("steps", 10)
+        cfg = workflow.get("7", {}).get("inputs", {}).get("cfg", 1)
+
+        print(f"[handler] Queuing: {w}x{h}, seed={seed_used}, steps={steps}, cfg={cfg}, lora={lora}")
         prompt_id = queue_prompt(workflow)
         print(f"[handler] prompt_id={prompt_id}, polling...")
 
@@ -250,6 +266,9 @@ def handler(job: dict) -> dict:
                 "seed": seed_used,
                 "width": w,
                 "height": h,
+                "lora_name": lora,
+                "steps": steps,
+                "cfg": cfg,
                 "filename": filename_out,
             },
         }
