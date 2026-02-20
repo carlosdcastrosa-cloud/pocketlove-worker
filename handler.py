@@ -99,6 +99,7 @@ def build_workflow(inp: dict) -> dict:
         wf["3"]["inputs"]["strength_model"] = lora_strength
         wf["3"]["inputs"]["strength_clip"] = lora_strength
     else:
+        wf["3"]["inputs"]["lora_name"] = dmd2_lora
         wf["3"]["inputs"]["strength_model"] = 0.0
         wf["3"]["inputs"]["strength_clip"] = 0.0
 
