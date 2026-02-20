@@ -39,6 +39,7 @@ RUN mkdir -p /workspace/ComfyUI/models/checkpoints \
 COPY workflow_api.json /workspace/workflow_api.json
 COPY handler.py /workspace/handler.py
 COPY start.sh /workspace/start.sh
+COPY extra_model_paths.yaml /workspace/ComfyUI/extra_model_paths.yaml
 RUN chmod +x /workspace/start.sh
 
 WORKDIR /workspace

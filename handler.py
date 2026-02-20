@@ -157,7 +157,13 @@ def queue_prompt(workflow: dict) -> str:
         "client_id": client_id
     }
     resp = requests.post(f"{COMFY_URL}/prompt", json=payload, timeout=30)
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        error_body = ""
+        try:
+            error_body = resp.text[:2000]
+        except Exception:
+            error_body = "(could not read response body)"
+        raise RuntimeError(f"ComfyUI /prompt returned {resp.status_code}: {error_body}")
     data = resp.json()
     prompt_id = data.get("prompt_id")
     if not prompt_id:

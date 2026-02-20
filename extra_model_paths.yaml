@@ -1,0 +1,4 @@
+runpod_volume:
+  base_path: /runpod-volume/
+  checkpoints: checkpoints/
+  loras: loras/
